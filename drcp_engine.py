@@ -1,12 +1,15 @@
 import math
 import serial
 import threading
-
+from requests import post
 import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix
 
+# PI_IP="192.168.1.251"
+PI_IP="localhost"
+PI_PORT="5001"
 
 class DRCPEngine:
     def __init__(self, debugger, cb_status, cb_coords, cb_heading):
@@ -184,16 +187,17 @@ class DRCPSerial():
         del self.ser
 
     def send_command(self, command):
-        self.debugger.log(f"[Serial] Sending command: {command}")
-        if not self.ser.is_open:
-            raise serial.SerialException("Serial port is not open.")
-        try:
-            self.ser.write(command.encode('utf-8'))
-            self.debugger.log(f"Command sent: {command}")
-        except serial.SerialTimeoutException as e:
-            self.debugger.log(f"Timeout while sending command: {e}")
-        except serial.SerialException as e:
-            self.debugger.log(f"Error sending command: {e}")
+        # self.debugger.log(f"[Serial] Sending command: {command}")
+        # if not self.ser.is_open:
+        #     raise serial.SerialException("Serial port is not open.")
+        # try:
+        #     self.ser.write(command.encode('utf-8'))
+        #     self.debugger.log(f"Command sent: {command}")
+        # except serial.SerialTimeoutException as e:
+        #     self.debugger.log(f"Timeout while sending command: {e}")
+        # except serial.SerialException as e:
+        #     self.debugger.log(f"Error sending command: {e}")
+        post(f"http://{PI_IP}:{PI_PORT}/send", json={"command":f"{command}"})
 
     def read_response(self):
         self.debugger.log("[Serial] Reading response")
