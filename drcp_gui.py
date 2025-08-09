@@ -35,19 +35,29 @@ print("LEFT_FRAME_WIDTH:", LEFT_FRAME_WIDTH)
 
 # just to help log n fix shit, can be deleted later
 class Debugger():
-    def __init__(self, debug_mode=False):
+    def __init__(self, debug_mode=False, onlyTag=False):
         self.debug_mode = debug_mode
+        self.onlyTag = onlyTag
         logfile = f"drcp_debug_log.txt"
         try:
             self.f = open(logfile, 'a+')
         except Exception as e:
             print(f"FAIL: Couldn't open logfile: {e}")
         self.f.write(f"--- STARTING DRCP LOG @ {time.strftime('(%d/%m %H:%M:%S) ---', time.localtime())}\n")
+        if self.onlyTag:
+            self.f.write("--- ONLY ACCEPTING TAGGED MESSAGES --- ")
 
-    def log(self, message):
+    def log(self, message, tag=None):
         if self.debug_mode:
-            print(f"[DEBUG] {message}")
-            self.f.write(f"{message}\n")
+            if self.onlyTag:
+                if tag==None:
+                    pass
+                else:
+                    print(f"[DEBUG] <{tag}> {message}")
+                    self.f.write(f"<{tag}> {message}\n")
+            else:
+                print(f"[DEBUG] {message}")
+                self.f.write(f"{message}\n")
 
 import tkinter as tk
 import math
@@ -55,19 +65,26 @@ import math
 class DeathRayControlPanel(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.debugger = Debugger(debug_mode=True)
+
+        self.version = "0.1.3"
+
+        self.debugger = Debugger(debug_mode=True, onlyTag=False)
+        self.debugger.log("version", f"[GUI] Running DRCP GUI v{self.version}")
+
         self.engine = DRCPEngine(debugger=self.debugger,
                                  cb_status=self._cb_update_status,
                                  cb_coords=self._cb_update_coords,
-                                 cb_heading=self._update_heading)
+                                 cb_heading=self._update_heading,
+                                 cb_rvrHeading=self._update_rover_heading,
+                                 cb_manual=self._start_manual_mode)
         self.status = "Status Placeholder"
-        self.serial = "/dev/placeholder"
+        #self.serial = "/dev/placeholder"
         self.current_heading = 0.0 
         self.requested_heading = 0.0
         self.rover_coords = [0.0000, 0.0000]  # [lat, lon]
         self.deathray_coords = [0.0000, 0.0000]  # [lat, lon]
 
-        self.title("Death Ray Control Panel v0")
+        self.title(f"Death Ray Control Panel v{self.version}")
         self.geometry(f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         self.configure(bg = COLOR_BG)
 
@@ -79,16 +96,17 @@ class DeathRayControlPanel(tk.Tk):
         style.configure("Control.TButton", background = COLOR_BT, foreground = COLOR_W, relief = "flat")
         
         # stop button
-        style.configure("Stop.TButton", background = "#FF0000", foreground = COLOR_W, relief = "flat")
+        style.configure("Stop.TButton", background = "#A10000", foreground = COLOR_W, relief = "flat")
         style.map("Stop.TButton",
                     background=[('active', "#FF0000")],
                     foreground=[('disabled', "#aaa")])
 
         # mode selector buttons
         style.map("Mode.TButton",
-                    background=[('active', "#00FF08")],
+                    background=[('active', "#007E04")],
                     foreground=[('disabled', "#FF0000")])
-
+        
+        style.configure("ModeSelected.TButton", background="#007E04", foreground="#000", relief = "flat")
         # text input field
 
         # label
@@ -106,7 +124,7 @@ class DeathRayControlPanel(tk.Tk):
 
         # left frame
         # has instructional images like how to put your phone to get initial heading
-        left_frame = tk.Frame(self.startup_frame, width = LEFT_FRAME_WIDTH, bg = "#A2FF38")
+        left_frame = tk.Frame(self.startup_frame, width = LEFT_FRAME_WIDTH, bg = COLOR_BG)
         left_frame.pack(fill = tk.Y, side = tk.LEFT, expand = False)
         left_frame.pack_propagate(False)
 
@@ -121,50 +139,50 @@ class DeathRayControlPanel(tk.Tk):
         instruction_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
 
         # right frame
-        right_frame = tk.Frame(self.startup_frame, bg = "#183394")
+        right_frame = tk.Frame(self.startup_frame, bg = COLOR_BG)
         right_frame.pack(fill = tk.BOTH, side = tk.RIGHT, expand = True)
         right_frame.pack_propagate(False)
 
         # title label
         title_label = tk.Label(right_frame, text = "Startup Procedure",
-                               bg = "#38CAFF", fg = COLOR_W,
+                               bg = COLOR_BG, fg = COLOR_W,
                                font = ("Helvetica", 18, "bold"))
         title_label.pack(side = tk.TOP, fill = tk.X, expand = True)
 
         # serial input frame
-        serial_frame = tk.Frame(right_frame, bg = "#FF3863", height=RIGHT_SUBFRAME_HEIGHT)
-        serial_frame.pack(side=tk.TOP, fill = tk.BOTH, expand = False)
-        serial_frame.pack_propagate(False)
-        serial_frame_title = tk.Label(serial_frame, text="Step 1: Death Ray serial port", bg = "#FF3863",
-                                      fg = COLOR_W, font = ("Helvetica", 12, "bold"))
-        serial_frame_title.pack(side = tk.TOP, fill=tk.X, expand=False)
-        serial_explanation = tk.Label(serial_frame, text="Enter the serial port for the Death Ray controller (e.g., /dev/serial2)",
-                                      bg = "#FF3863", fg = COLOR_W, font = ("Helvetica", 10))
-        serial_explanation.pack(fill=tk.X, expand=False)
-        serial_input_frame = tk.Frame(serial_frame, bg = "#38FFB9")
-        serial_input_frame.pack(fill=tk.BOTH, expand=True)
-        serial_input_frame.pack_propagate(False)
-        # serial port input field and button
-        serial_input = tk.Entry(serial_input_frame, width=20)
-        serial_input.insert(0, self.serial)  # default value
-        serial_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, pady=5)
-        serial_button = ttk.Button(serial_input_frame, text="Set Serial Port", style="Control.TButton",
-                                  command=lambda: self._set_serial(serial_input.get()))
-        serial_button.pack(side=tk.RIGHT, fill=tk.X, expand=False, padx=5, pady=5)
+        # serial_frame = tk.Frame(right_frame, bg = "#FF3863", height=RIGHT_SUBFRAME_HEIGHT)
+        # serial_frame.pack(side=tk.TOP, fill = tk.BOTH, expand = False)
+        # serial_frame.pack_propagate(False)
+        # serial_frame_title = tk.Label(serial_frame, text="Step 1: Death Ray serial port", bg = "#FF3863",
+        #                               fg = COLOR_W, font = ("Helvetica", 12, "bold"))
+        # serial_frame_title.pack(side = tk.TOP, fill=tk.X, expand=False)
+        # serial_explanation = tk.Label(serial_frame, text="Enter the serial port for the Death Ray controller (e.g., /dev/serial2)",
+        #                               bg = "#FF3863", fg = COLOR_W, font = ("Helvetica", 10))
+        # serial_explanation.pack(fill=tk.X, expand=False)
+        # serial_input_frame = tk.Frame(serial_frame, bg = "#38FFB9")
+        # serial_input_frame.pack(fill=tk.BOTH, expand=True)
+        # serial_input_frame.pack_propagate(False)
+        # # serial port input field and button
+        # serial_input = tk.Entry(serial_input_frame, width=20)
+        # serial_input.insert(0, self.serial)  # default value
+        # serial_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, pady=5)
+        # serial_button = ttk.Button(serial_input_frame, text="Set Serial Port", style="Control.TButton",
+        #                           command=lambda: self._set_serial(serial_input.get()))
+        # serial_button.pack(side=tk.RIGHT, fill=tk.X, expand=False, padx=5, pady=5)
 
         # initial heading input frame
-        heading_frame = tk.Frame(right_frame, bg = "#FFB338", height=RIGHT_SUBFRAME_HEIGHT*1.5)
+        heading_frame = tk.Frame(right_frame, bg = COLOR_BG, height=RIGHT_SUBFRAME_HEIGHT*1.5)
         heading_frame.pack(side=tk.TOP, fill = tk.BOTH, expand = False)
         heading_frame.pack_propagate(False)
-        heading_frame_title = tk.Label(heading_frame, text="Step 2: Set Initial Heading", bg = "#FFB338",
+        heading_frame_title = tk.Label(heading_frame, text="Step 1: Set Initial Heading", bg = COLOR_BG,
                                        justify="left",
                                        fg = COLOR_W, font = ("Helvetica", 12, "bold"))
         heading_frame_title.pack(side = tk.TOP, fill=tk.X, expand=False)
         explanation_text = "Open a compass app on your phone and place it with the charging port flat against the front of the dish, as shown. Enter the magnetic heading shown in the app. (0°-359°)"
         heading_explanation = tk.Label(heading_frame, text=explanation_text, wraplength=int(SCREEN_WIDTH-LEFT_FRAME_WIDTH-7), justify="left",
-                                       bg = "#FFB338", fg = COLOR_W, font = ("Helvetica", 10))
+                                       bg = COLOR_BG, fg = COLOR_W, font = ("Helvetica", 10))
         heading_explanation.pack(fill=tk.BOTH, expand=False)
-        heading_input_frame = tk.Frame(heading_frame, bg = "#38FFB3")
+        heading_input_frame = tk.Frame(heading_frame, bg = COLOR_BG)
         heading_input_frame.pack(fill=tk.BOTH, expand=True)
         heading_input_frame.pack_propagate(False)
         # heading input field and button
@@ -176,33 +194,33 @@ class DeathRayControlPanel(tk.Tk):
         heading_button.pack(side=tk.RIGHT, fill=tk.X, expand=False, padx=5, pady=5)
 
         # initial death ray coordinates input frame
-        coords_frame = tk.Frame(right_frame, bg = "#FF38B3", height= RIGHT_SUBFRAME_HEIGHT)
+        coords_frame = tk.Frame(right_frame, bg = COLOR_BG, height= RIGHT_SUBFRAME_HEIGHT*1.5)
         coords_frame.pack(side=tk.TOP, fill=tk.BOTH, expand = False)
         coords_frame.pack_propagate(False)
-        coords_frame_title = tk.Label(coords_frame, text="Step 3: Set Initial Death Ray Coordinates",
-                                      bg = "#33886C", fg = COLOR_W, font = ("Helvetica", 12, "bold"))
+        coords_frame_title = tk.Label(coords_frame, text="Step 2: Set Initial Death Ray Coordinates",
+                                      bg = COLOR_BG, fg = COLOR_W, font = ("Helvetica", 12, "bold"))
         coords_frame_title.pack(side = tk.TOP, fill=tk.X, expand=False)
         coords_explanation = tk.Label(coords_frame, text="Enter the initial coordinates of the Death Ray from the Reach RS+.",
-                                      bg = "#33886C", fg = COLOR_W, font = ("Helvetica", 10))
+                                      bg = COLOR_BG, fg = COLOR_W, font = ("Helvetica", 10))
         coords_explanation.pack(fill=tk.X, expand=False, padx=5, pady=5)
-        coords_input_frame = tk.Frame(coords_frame, bg = "#38FFB3")
+        coords_input_frame = tk.Frame(coords_frame, bg = COLOR_BG)
         coords_input_frame.pack(fill=tk.BOTH, expand=True)
         coords_input_frame.pack_propagate(False)
         # latitude input field and button
         lat_input = tk.Entry(coords_input_frame, width=10)
-        lat_input.insert(0, "52.51858752")  # default value
+        lat_input.insert(0, "latitude")  # default value
         lat_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, pady=5)
         # longitude input field and button
         lon_input = tk.Entry(coords_input_frame, width=10)
-        lon_input.insert(0, "13.40462655")  # default value
+        lon_input.insert(0, "longitude")  # default value
         lon_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, pady=5)
         coords_button = ttk.Button(coords_input_frame, text="Set Initial Coordinates", style="Control.TButton",
                                    command=lambda: self._set_init_coords(float(lat_input.get()), float(lon_input.get())))
         coords_button.pack(side=tk.RIGHT, fill=tk.X, expand=False, padx=5, pady=5)
 
         # buttons frame
-        buttons_frame = tk.Frame(right_frame, bg = "#38FFB3", height= EMPTY_FRAME_HEIGHT)
-        buttons_frame.pack(side=tk.TOP, fill=tk.BOTH, expand = True)
+        buttons_frame = tk.Frame(right_frame, bg = COLOR_BG, height= EMPTY_FRAME_HEIGHT)
+        buttons_frame.pack(side=tk.TOP, fill=tk.BOTH, expand = False)
         buttons_frame.pack_propagate(False)
         # manual only button
         manual_button = ttk.Button(buttons_frame, text="Skip (Manual mode only)", style="Control.TButton",
@@ -238,7 +256,7 @@ class DeathRayControlPanel(tk.Tk):
         logo_label.pack(fill=tk.BOTH, expand=False)
 
         # title label
-        title_label = tk.Label(top_frame, text = "Death Ray Control Panel",
+        title_label = tk.Label(top_frame, text = f"Death Ray Control Panel v{self.version}",
                                bg = COLOR_BG, fg = COLOR_W,
                                font = ("Helvetica", 18, "bold"))
         title_label.pack(side = tk.LEFT, fill = tk.BOTH, expand = True, padx=5, pady=5)
@@ -321,8 +339,10 @@ class DeathRayControlPanel(tk.Tk):
         
         # Mode row
         tk.Label(frame, text="Mode", fg=COLOR_W, bg=COLOR_FG).grid(row=1, column=0, sticky="nsew")
-        mode_manual_button = ttk.Button(frame, text="MANUAL", style="Mode.TButton", command=self._start_manual_mode).grid(row=1, column=1, sticky="nsew")
-        mode_auto_button = ttk.Button(frame, text="AUTO", style="Mode.TButton", command=self._start_auto_mode).grid(row=1, column=2, sticky="nsew")
+        self.mode_manual_button = ttk.Button(frame, text="MANUAL", style="ModeSelected.TButton", command=self._start_manual_mode)
+        self.mode_manual_button.grid(row=1, column=1, sticky="nsew")
+        self.mode_auto_button = ttk.Button(frame, text="AUTO", style="Mode.TButton", command=self._start_auto_mode)
+        self.mode_auto_button.grid(row=1, column=2, sticky="nsew")
         
     def _addGNSSFrame(self, parent):
         frame = tk.LabelFrame(parent, text="GNSS Data", height=RIGHT_SUBFRAME_HEIGHT+5,
@@ -380,12 +400,14 @@ class DeathRayControlPanel(tk.Tk):
 
         # serial port text input field
         serial_field = tk.Entry(frame, width = 15)
-        serial_field.insert(0, self.serial)
+        serial_field.insert(0, "Not used, ignore")
         serial_field.pack(side=tk.LEFT, padx=5, pady=5)
 
         # set button
         set_button = ttk.Button(frame, text="Set", style="Control.TButton", command=lambda: self._set_serial(serial_field.get()))
         set_button.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self._set_serial('fake') # easier to pretend to create a serial than to rewrite a bunch of shit
 
     def _addControlsFrame(self, parent):
         frame = tk.LabelFrame(parent, text="Controls", height=RIGHT_SUBFRAME_HEIGHT,
@@ -461,9 +483,13 @@ class DeathRayControlPanel(tk.Tk):
     def _start_manual_mode(self):
         self.debugger.log("[GUI] Starting manual mode")
         self.engine.set_mode("manual")
+        self.mode_manual_button.configure(style="ModeSelected.TButton")
+        self.mode_auto_button.configure(style="Mode.TButton")
 
     def _start_auto_mode(self):
         self.debugger.log("[GUI] Starting auto mode")
+        self.mode_manual_button.configure(style="Mode.TButton")
+        self.mode_auto_button.configure(style="ModeSelected.TButton")
         self.engine.set_mode("auto")
         threading.Thread(target=self.engine.auto, daemon=True).start()
 
@@ -487,6 +513,12 @@ class DeathRayControlPanel(tk.Tk):
         self._updateHeadingDisplayLine(self.current_heading, self.currentHeadingLine)
         self.current_heading_value_label.config(text=self.current_heading)
 
+    def _update_rover_heading(self, ang):
+        self.debugger.log(f"[GUI] _cb_update_rover_heading called with {ang} degrees")
+        self.requested_heading = ang
+        self._updateHeadingDisplayLine(self.requested_heading, self.requestedHeadingLine)
+        self.requested_heading_value_label.config(text=self.requested_heading)
+
     def manualRotate(self, ang):
         self.debugger.log(f"[GUI] manualRotate called with angle: {ang}")
         try:
@@ -501,6 +533,7 @@ class DeathRayControlPanel(tk.Tk):
         self.current_heading = (self.current_heading + ang) % 360
         self._update_heading(self.current_heading)
         self.engine.rotateBy(ang)
+
 
 if __name__ == "__main__":
     cp = DeathRayControlPanel()

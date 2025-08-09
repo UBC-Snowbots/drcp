@@ -7,15 +7,19 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix
 
-# PI_IP="192.168.1.251"
-PI_IP="localhost"
+PI_IP="192.168.1.251"
+#PI_IP="localhost"
 PI_PORT="5001"
 
 class DRCPEngine:
-    def __init__(self, debugger, cb_status, cb_coords, cb_heading):
+    def __init__(self, debugger, cb_status, cb_coords, cb_heading, cb_rvrHeading, cb_manual):
+
+        version = "0.1.3"
 
         # debug
         self.debugger = debugger
+
+        self.debugger.log("version", f"[engine] Running DRCP Engine v{version}")
 
         self.status = "Initializing"
         self.mode = "manual"
@@ -23,6 +27,8 @@ class DRCPEngine:
         self.updateStatus = cb_status # callback to update status in GUI
         self.updateCoords = cb_coords # callback to update coordinates in GUI
         self.updateHeading = cb_heading
+        self.updateRoverHeading = cb_rvrHeading
+        self.GUIsetManual = cb_manual
 
         self.dr_coords = [0.0000, 0.0000]  # [lat, lon]
         self.rover_coords = [0.0000, 0.0000] # [lat, lon]
@@ -37,17 +43,17 @@ class DRCPEngine:
 
     # internal funcs
     def _set_serial(self, serial_port):
-        self.debugger.log(f"[engine] _startup_set_serial called with port: {serial_port}")
-        if not serial_port:
-            raise ValueError("[engine] Serial port cannot be empty")
-        try:
-            self.debugger.log("[engine] Closing existing serial connection")
-            self.serial.close()
-        except AttributeError:
-            self.debugger.log("[engine] No existing serial connection to close")
-        except serial.SerialException as e:
-            self.debugger.log(f"[engine] Error closing serial connection: {e}")
-        self.debugger.log("[engine] Opening new serial connection")
+        # self.debugger.log(f"[engine] _startup_set_serial called with port: {serial_port}")
+        # if not serial_port:
+        #     raise ValueError("[engine] Serial port cannot be empty")
+        # try:
+        #     self.debugger.log("[engine] Closing existing serial connection")
+        #     self.serial.close()
+        # except AttributeError:
+        #     self.debugger.log("[engine] No existing serial connection to close")
+        # except serial.SerialException as e:
+        #     self.debugger.log(f"[engine] Error closing serial connection: {e}")
+        # self.debugger.log("[engine] Opening new serial connection")
         self.serial = DRCPSerial(self.debugger, serial_port)
         
 
@@ -70,6 +76,9 @@ class DRCPEngine:
     def _ros_callback(self, coords):
         self.rover_coords = [coords[0], coords[1]]
         self.updateCoords(self.rover_coords)
+        if self.dr_coords[0] != 0.0000:
+            rover_bearing = self.calculate_bearing(self.dr_coords[0], self.dr_coords[1], self.rover_coords[0], self.rover_coords[1])
+            self.updateRoverHeading(rover_bearing)
 
 
     def calculate_bearing(self, lat1, lon1, lat2, lon2):
@@ -87,7 +96,7 @@ class DRCPEngine:
             math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(diff_lon_rad)
 
         initial_bearing = math.atan2(x, y)
-        bearing_deg = (math.degrees(initial_bearing) + 360) % 360
+        bearing_deg = int((math.degrees(initial_bearing) + 360) % 360)
         return bearing_deg
     
     def set_mode(self, mode):
@@ -102,56 +111,95 @@ class DRCPEngine:
             raise RuntimeError("Engine is not in auto mode")
 
         while self.mode == "auto":
-            # Calculate bearing to the antenna
-            bearing = self.calculate_bearing(
-                self.dr_coords[0], self.dr_coords[1],
-                self.rover_coords[0], self.rover_coords[1]
-            )
-            if bearing != self.current_heading:
-                degrees_to_rotate = (bearing - self.current_heading) % 360
-                if degrees_to_rotate > 180:
-                    degrees_to_rotate -= 360
-                if abs(degrees_to_rotate) > 1:  # Allow a small tolerance
-                    self.debugger.log(f"[engine] Auto mode: rotating by {degrees_to_rotate} degrees")
-                    self.updateHeading(degrees_to_rotate)
-                    self.rotateBy(degrees_to_rotate)
-                else:
-                    #self.debugger.log("[engine] Auto mode: no significant rotation needed")
-                    self.debugger.log(f"[engine] heading change {degrees_to_rotate}")
-                    pass
+            # don't go until we got both coordinates
+            if self.dr_coords[0] == 0.0000 or self.rover_coords[0] == 0.0000:
+                self.debugger.log(f"[engine] don't have full coords yet, not rotating")
+            else:    
+                # Calculate bearing to the antenna
+                bearing = self.calculate_bearing(
+                    self.dr_coords[0], self.dr_coords[1],
+                    self.rover_coords[0], self.rover_coords[1]
+                )
+
+                if bearing != self.current_heading:
+                    degrees_to_rotate = (bearing - self.current_heading) % 360 # calculate difference between current heading and new one
+                    if degrees_to_rotate > 180:
+                        degrees_to_rotate -= 360 # if have to turn more than half-way, then we should be turning backwards
+                    if abs(degrees_to_rotate) > 2:
+                        self.updateRoverHeading(bearing) # set requested heading to new rover heading
+                        self.debugger.log("auto", f"Rotating by {degrees_to_rotate} degrees")
+                        self.updateStatus(f"Auto: Rotating by {degrees_to_rotate} degrees...")
+                        feedback = self.rotateBy(degrees_to_rotate, True) # rotate by difference
+                        if feedback.startswith("#done$rotate("):
+                            self.debugger.log("Auto: Done rotating")
+                            self.updateStatus(feedback)
+                            self.updateHeading(bearing)
+                            self.current_heading = bearing
+                    else:
+                        self.debugger.log("auto", "Bearing difference not enough")
             time.sleep(0.5)
+
+
+
+
+                # if bearing != self.current_heading:
+                #     degrees_to_rotate = (bearing - self.current_heading) % 360
+                #     if degrees_to_rotate > 180:
+                #         degrees_to_rotate -= 360
+                #     if abs(degrees_to_rotate) > 1:  # Allow a small tolerance
+                #         self.debugger.log(f"[engine] Auto mode: rotating by {degrees_to_rotate} degrees")
+                #         self.updateHeading(degrees_to_rotate)
+                #         feedback = self.rotateBy(degrees_to_rotate)
+                #         self.debugger.log(f'[engine] received feedback {feedback}')
+                #         self.updateStatus("Finished rotating")
+                #     else:
+                #         #self.debugger.log("[engine] Auto mode: no significant rotation needed")
+                #         #self.debugger.log(f"[engine] heading change {degrees_to_rotate}")
+                #         pass
+            #time.sleep(0.5)
             
 
-    def rotateBy(self, degrees):
-        self.debugger.log(f"[engine] rotateBy called with degrees: {degrees}")
-        if not isinstance(degrees, (int, float)):
-            raise ValueError("Degrees must be a number")
-        if not (-360 <= degrees <= 360):
-            raise ValueError("Degrees must be between -360 and 360")
-        
-        self.current_heading = (self.current_heading + degrees) % 360
-        self.cmd_rotate(degrees)
+    def rotateBy(self, degrees, auto=False):
+        if not auto:
+            self.debugger.log(f"[engine] rotateBy called with degrees: {degrees}")
+            if not isinstance(degrees, (int, float)):
+                raise ValueError("Degrees must be a number")
+            if not (-360 <= degrees <= 360):
+                raise ValueError("Degrees must be between -360 and 360")
+            
+            self.current_heading = (self.current_heading + degrees) % 360
+            self.updateStatus(f"Rotating by {degrees} degrees")
+            response = self.cmd_rotate(degrees) # feedback from the death ray
+            return response
+        else:
+            response = self.cmd_rotate(degrees)
+            return response
 
     def cmd_home(self):
         self.debugger.log("[engine] cmd_home called")
-        self.status = "Homing..."
+        self.status = "Home doesn't do anything"
         self.updateStatus(self.status)
-        self.serial.send_command("$hone")
+        #self.serial.send_command("$hone")
 
     def cmd_rotate(self, degrees):
         self.debugger.log(f"[engine] cmd_rotate called with degrees: {degrees}")
-        self.status = f"Rotating by {int(degrees)} degrees"
-        self.updateStatus(self.status)
-        if degrees > 0:
-            self.serial.send_command(f"$rotate({abs(int(degrees))},1)")
-        else:
-            self.serial.send_command(f"$rotate({int(degrees)},0)")
+        #self.status = f"Rotating by {int(degrees)} degrees"
+        #self.updateStatus(self.status)
+        try:
+            if degrees < 0:
+                response = self.serial.send_command(f"$rotate({abs(int(degrees))},0)")
+            else:
+                response = self.serial.send_command(f"$rotate({int(degrees)},1)")
+            return response
+        except ConnectionError:
+            self.debugger.log(f"[engine] !!! COULDN'T CONNECT TO Pi's WEBSERVER, CHECK IP and IF WEBSERVER IS RUNNING !!!")
 
     def cmd_stop(self):
         self.debugger.log("[engine] cmd_stop called")
-        self.status = "Stopping"
-        self.updateStatus("Stopped")
         self.serial.send_command("$stop")
+        self.set_mode("manual")
+        self.GUIsetManual()
+        self.updateStatus("Stopped, mode forced to manual")
 
 class DRCPSerial():
     def __init__(self, debugger, serial_port):
@@ -162,7 +210,7 @@ class DRCPSerial():
         self.baudrate = 9600 
         self.timeout = 1
 
-        self._open()
+        #self._open()
 
     def _open(self):
         self.debugger.log(f"[Serial] Opening serial port: {self.serial_port}")
@@ -197,8 +245,9 @@ class DRCPSerial():
         #     self.debugger.log(f"Timeout while sending command: {e}")
         # except serial.SerialException as e:
         #     self.debugger.log(f"Error sending command: {e}")
-        post(f"http://{PI_IP}:{PI_PORT}/send", json={"command":f"{command}"})
-
+        response = post(f"http://{PI_IP}:{PI_PORT}/send", json={"command":f"{command}"}, timeout=70)
+        print(f"[DBG] {response.json()['feedback']}")
+        return response.json()['feedback']
     def read_response(self):
         self.debugger.log("[Serial] Reading response")
         # Read response from the Death Ray controller
