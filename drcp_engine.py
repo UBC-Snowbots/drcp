@@ -7,7 +7,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix
 
-PI_IP="192.168.1.251"
+PI_IP="192.168.1.249"
 #PI_IP="localhost"
 PI_PORT="5001"
 
